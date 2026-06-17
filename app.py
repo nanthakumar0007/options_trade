@@ -101,7 +101,7 @@ def score_trade(rsi, macd_val, macd_sig, close, bb_low, bb_high, volume, avg_vol
     return direction, score, reasons
 
 
-def analyze_stock(ticker: str):
+def analyze_stock(ticker: str, budget: float = BUDGET):
     try:
         tk = yf.Ticker(ticker)
         hist = tk.history(period="60d", interval="1d")
@@ -129,7 +129,7 @@ def analyze_stock(ticker: str):
         t = days_to_exp / 252
         estimated_premium = round(close * iv * (t ** 0.5) * 0.4, 2)  # rough ATM premium
         estimated_premium = max(estimated_premium, 0.01)
-        contracts_affordable = int(BUDGET / (estimated_premium * 100))
+        contracts_affordable = int(budget / (estimated_premium * 100))
 
         # Estimate realistic intraday target (1 σ move)
         daily_move_pct = iv / (252 ** 0.5)
@@ -164,7 +164,7 @@ def analyze_stock(ticker: str):
         return None
 
 
-def find_options_chain(ticker: str, direction: str):
+def find_options_chain(ticker: str, direction: str, budget: float = BUDGET):
     """Return the best near-money option within budget."""
     try:
         tk = yf.Ticker(ticker)
@@ -184,8 +184,8 @@ def find_options_chain(ticker: str, direction: str):
 
         price = tk.history(period="2d")["Close"].iloc[-1]
 
-        # Filter affordable contracts (ask * 100 <= BUDGET)
-        df = df[df["ask"] * 100 <= BUDGET].copy()
+        # Filter affordable contracts (ask * 100 <= budget)
+        df = df[df["ask"] * 100 <= budget].copy()
         if df.empty:
             return None
 
@@ -204,7 +204,7 @@ def find_options_chain(ticker: str, direction: str):
             "impliedVolatility": round(best.get("impliedVolatility", 0) * 100, 1),
             "inTheMoney": best.get("inTheMoney", False),
             "cost_per_contract": round(best["ask"] * 100, 2),
-            "contracts": int(BUDGET // (best["ask"] * 100)),
+            "contracts": int(budget // (best["ask"] * 100)),
         }
     except Exception:
         return None
@@ -212,8 +212,12 @@ def find_options_chain(ticker: str, direction: str):
 
 # ── UI ─────────────────────────────────────────────────────────────────────────
 
+st.sidebar.header("⚙️ Settings")
+budget_input = st.sidebar.number_input("Your Budget ($)", value=35.0, min_value=5.0, max_value=500.0, step=5.0)
+pdt_remaining = st.sidebar.number_input("PDT trades remaining this week", value=3, min_value=0, max_value=3)
+
 st.title("📈 Daily Options Trade Predictor")
-st.caption(f"Budget: **${BUDGET}** · PDT limit: **{MAX_PDT_PER_WEEK} trades/week** · Powered by Yahoo Finance")
+st.caption(f"Budget: **${budget_input}** · PDT limit: **{MAX_PDT_PER_WEEK} trades/week** · Powered by Yahoo Finance")
 
 with st.expander("⚠️ Risk Disclaimer", expanded=False):
     st.warning(
@@ -221,11 +225,6 @@ with st.expander("⚠️ Risk Disclaimer", expanded=False):
         "This tool is for educational and informational purposes only. Past signals do not "
         "guarantee future results. Never risk money you cannot afford to lose."
     )
-
-# Sidebar controls
-st.sidebar.header("⚙️ Settings")
-budget_input = st.sidebar.number_input("Your Budget ($)", value=35.0, min_value=5.0, max_value=500.0, step=5.0)
-pdt_remaining = st.sidebar.number_input("PDT trades remaining this week", value=3, min_value=0, max_value=3)
 top_n = st.sidebar.slider("Stocks to scan", min_value=5, max_value=len(WATCHLIST), value=20)
 min_score = st.sidebar.slider("Min confidence score", 0, 100, 40)
 st.sidebar.markdown("---")
@@ -244,7 +243,7 @@ if st.button("🔍 Scan for Today's Best Trade", type="primary", use_container_w
 
     for i, ticker in enumerate(scan_list):
         progress.progress((i + 1) / len(scan_list), text=f"Analyzing {ticker}…")
-        r = analyze_stock(ticker)
+        r = analyze_stock(ticker, budget=budget_input)
         if r and r["score"] >= min_score and r["contracts_affordable"] >= 1:
             results.append(r)
 
@@ -273,7 +272,7 @@ if st.button("🔍 Scan for Today's Best Trade", type="primary", use_container_w
 
     # Options chain lookup
     with st.spinner("Fetching live options chain…"):
-        opt = find_options_chain(best["ticker"], best["direction"])
+        opt = find_options_chain(best["ticker"], best["direction"], budget=budget_input)
 
     st.markdown("### 💰 Recommended Contract")
     if opt:
